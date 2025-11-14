@@ -1,0 +1,493 @@
+import "Srl/String";
+import "Srl/Time";
+import "Apm";
+Apm.importFile("Alusus/Json");
+Apm.importFile("Alusus/AlususNet");
+Apm.importFile("Alusus/Rows", { "Rows.alusus", "Drivers/Postgresql.alusus" });
+Apm.importFile("Alusus/WebPlatform");
+Apm.importFile("Alusus/Nashir", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
+use Srl;
+use WebPlatform;
+use Promises;
+
+//==============================================================================
+// Database
+
+macro envVarOrDefault[varName, defaultVal] CharsPtr().{
+    this = System.getEnv(varName);
+    if this == 0 this = defaultVal;
+}
+
+@model["rooms", 1]
+class RoomModel {
+    Rows.define_model_essentials[];
+
+    @VarChar["256"]
+    @primaryKey
+    @column
+    def name: String;
+
+    @VarChar["1024"]
+    @notNull
+    @column
+    def password: String;
+}
+
+@model["users", 1]
+class UserModel {
+    Rows.define_model_essentials[];
+
+    @VarChar["256"]
+    @primaryKey
+    @column
+    def username: String;
+
+    @VarChar["1024"]
+    @notNull
+    @column
+    def password: String;
+}
+
+@model["messages", 2]
+class MessageModel {
+    Rows.define_model_essentials[];
+
+    @foreignKey["rooms", "name"]
+    @VarChar["256"]
+    @notNull
+    @column["room_name"]
+    def roomName: String;
+
+    @foreignKey["users", "username"]
+    @VarChar["256"]
+    @notNull
+    @column
+    def username: String;
+
+    @VarChar["1024"]
+    @notNull
+    @column
+    def message: String;
+
+    @BigInteger
+    @notNull
+    @column["creation_date"]
+    def creationDate: Int[64];
+
+    @migration[1, 2, { RoomModel: 1; UserModel: 1 }]
+    function migrateToV2(db: ref[Rows.Db]): SrdRef[Error] {
+        db.exec("alter table messages add column room_name varchar(256) not null references rooms(name)");
+        db.exec("alter table messages add column username varchar(256) not null references users(username)");
+        return SrdRef[Error]();
+    }
+}
+
+def db: Rows.Db;
+def schema: {
+    RoomModel,
+    UserModel,
+    MessageModel
+};
+
+function initializeDatabase {
+    db.init(closure(d: ref[SrdRef[Rows.Driver]]) {
+        d = getDbDriver();
+    });
+    db.schemaBuilder[schema].migrate();
+}
+
+function getDbDriver(): SrdRef[Rows.Driver] {
+    def driver: SrdRef[Rows.Driver] = Rows.PostgresqlDriver(Rows.ConnectionParams().{
+        dbName = String(envVarOrDefault["DB_NAME", "alusus"]).trim();
+        userName = String(envVarOrDefault["DB_USERNAME", "alusus"]).trim();
+        password = String(envVarOrDefault["DB_PASSWORD", "alusus"]).trim();
+        host = String(envVarOrDefault["DB_HOST", "0.0.0.0"]).trim();
+        port = String.parseInt(envVarOrDefault["DB_PORT", "5432"]);
+    });
+    if !driver.isConnected() {
+        System.fail(1, String("Error connecting to DB: ") + driver.getLastError());
+    }
+    return driver;
+}
+
+//==============================================================================
+// Backend
+
+def MAX_MESSAGES: 12;
+
+@beEndpoint["POST", "/validate-creds"]
+func validateCreds (conn: ptr[Http.Connection]) {
+    def postData: array[Char, 1024];
+    def postDataSize: Int = Http.read(conn, postData~ptr, postData~size);
+    def body: Json = String(postData~ptr, postDataSize);
+    def roomName: String = body("roomName")~cast[String].trim();
+    def roomPassword: String = body("roomPassword");
+    def userName: String = body("userName")~cast[String].trim();
+    def userPassword: String = body("userPassword");
+    // Verify or create user.
+    def users: Array[SrdRef[UserModel]] = db.from[UserModel].where[username == userName].select();
+    if users.getLength() == 0 {
+        db.save[UserModel](UserModel().{
+            username = userName;
+            password = userPassword;
+        });
+    } else if users(0).password != userPassword {
+        Http.print(conn, "HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+    }
+    // Verify or create room.
+    def rooms: Array[SrdRef[RoomModel]] = db.from[RoomModel].where[name == roomName].select();
+    if rooms.getLength() == 0 {
+        db.save[RoomModel](RoomModel().{
+            name = roomName;
+            password = roomPassword;
+        });
+    } else if rooms(0).password != roomPassword {
+        Http.print(conn, "HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+    }
+    // Successful
+    Http.print(conn, "HTTP/1.1 200 Ok\r\n\r\n");
+}
+
+@beEndpoint["POST", "/add-message"]
+func postMessages (conn: ptr[Http.Connection]) {
+    def postData: array[Char, 4096];
+    def postDataSize: Int = Http.read(conn, postData~ptr, postData~size);
+    def body: Json = String(postData~ptr, postDataSize);
+    if not validateCreds(body) {
+        Http.print(conn, "HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+    }
+    def msg: MessageModel;
+    msg.username = body("userName")~cast[String].trim();
+    msg.roomName = body("roomName")~cast[String].trim();
+    msg.message = body("message");
+    msg.creationDate = Time.getTimestamp(0);
+    db.save[MessageModel](msg);
+    Http.print(conn, "HTTP/1.1 200 Ok\r\n\r\n");
+}
+
+@beEndpoint["POST", "/get-messages"]
+func getMessages (conn: ptr[Http.Connection]) {
+    def postData: array[Char, 4096];
+    def postDataSize: Int = Http.read(conn, postData~ptr, postData~size);
+    def body: Json = String(postData~ptr, postDataSize);
+    if not validateCreds(body) {
+        Http.print(conn, "HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+    }
+    // Fetch messages from DB.
+    def messages: Array[SrdRef[MessageModel]] = db
+        .from[MessageModel]
+        .where[roomName == body("roomName")~cast[String].trim()]
+        .order[-creationDate]
+        .select()
+        .slice(0, MAX_MESSAGES);
+    def response: StringBuilder(1024 * 10, 1024 * 5);
+    def i: Int;
+    for i = messages.getLength() - 1, i >= 0, --i {
+        if i != messages.getLength() - 1 response += "\n";
+        response.format("- %s: %s", messages(i).username.buf, messages(i).message.buf);
+    }
+    // Delete older messages.
+    if messages.getLength() > 0 {
+        db.from[MessageModel]
+            .where[roomName == body("roomName")~cast[String].trim() and
+                creationDate < messages(messages.getLength() - 1).creationDate]
+            .delete();
+    }
+    // Send response.
+    Http.print(conn, "HTTP/1.1 200 Ok\r\n");
+    Http.print(conn, "Content-Type: text/plain\r\n");
+    Http.print(conn, "Cache-Control: no-cache\r\n");
+    Http.print(conn, "Content-Length: %d\r\n\r\n", response.getLength());
+    Http.print(conn, response);
+}
+
+func validateCreds (json: Json): Bool {
+    def roomName: String = json("roomName")~cast[String].trim();
+    def roomPassword: String = json("roomPassword");
+    def userName: String = json("userName")~cast[String].trim();
+    def userPassword: String = json("userPassword");
+    def users: Array[SrdRef[UserModel]] = db.from[UserModel].where[username == userName].select();
+    if users.getLength() == 0 or users(0).password != userPassword {
+        return false;
+    }
+    def rooms: Array[SrdRef[RoomModel]] = db.from[RoomModel].where[name == roomName].select();
+    if rooms.getLength() == 0 or rooms(0).password != roomPassword {
+        return false;
+    }
+    return true;
+}
+
+
+//==============================================================================
+// Frontend Components
+
+class Header {
+    @injection def component: Component;
+
+    handler this~init() {
+        this.view = Box({}).{
+            style.{
+                padding = Length4.pt(4);
+                borderWidth = Length4.pt(0, 0, 1.5, 0);
+                borderStyle = BorderStyle.SOLID;
+                borderColor = Color("000");
+                justify = Justify.START;
+                display = Display.FLEX;
+                layout = Layout.COLUMN;
+                background = Background(Color("fff"));
+            };
+            addChildren({
+                Text(String("Wasm Chat")).{
+                    style.fontSize = Length.pt(18.0);
+                }
+            });
+        };
+    }
+
+    handler this_type(): SrdRef[Header] {
+        return SrdRef[Header].construct();
+    }
+}
+
+class TextEntry {
+    @injection def component: Component;
+
+    def onNewEntry: closure (String);
+    def textInput: SrdRef[TextInput];
+
+    handler this~init() {
+        def self: ref[this_type](this);
+
+        this.view = Box({}).{
+            style.{
+                display = Display.FLEX;
+                layout = Layout.ROW;
+                justify = Justify.SPACE_BETWEEN;
+            };
+            addChildren({
+                TextInput().{
+                    self.textInput = this;
+                    style.{
+                        flex = Flex(1);
+                        margin = Length4.px(10);
+                        height = Length.px(50);
+                        fontSize = Length.pt(12.0);
+                        borderStyle = BorderStyle.SOLID;
+                        borderColor = Color("000");
+                        borderWidth = Length4.px(1.5);
+                    };
+                    onKeyUp.connect(closure (widget: ref[TextInput], payload: ref[String]) {
+                        if payload == "Shift+Enter" {
+                            def newData: String = widget.getText().trim();
+                            widget.setText(String());
+                            if not self.onNewEntry.isNull() self.onNewEntry(newData);
+                        }
+                    });
+                },
+                Button(String("Send")).{
+                    style.{
+                        height = Length.px(50);
+                        width = Length.px(50);
+                        fontSize = Length.px(16.0);
+                        justify = Justify.CENTER;
+                        margin = Length4.px(10, 10, 10, 0);
+                    };
+                    onClick.connect(closure (widget: ref[Widget], payload: ref[Int]) {
+                        def newData: String = self.textInput.getText().trim();
+                        self.textInput.setText(String());
+                        if not self.onNewEntry.isNull() self.onNewEntry(newData);
+                    });
+                }
+            });
+        };
+    }
+
+    handler this_type(): SrdRef[TextEntry] {
+        return SrdRef[TextEntry].construct();
+    }
+}
+
+//==============================================================================
+// Frontend Pages
+
+def userName: String;
+def userPassword: String;
+def roomName: String;
+def roomPassword: String;
+
+func login {
+    def success: SrdRef[Promise[Int]] = Promise[Int].new();
+    def notification: SrdRef[Text];
+    def roomName: SrdRef[Input];
+    def roomPassword: SrdRef[Input];
+    def userName: SrdRef[Input];
+    def userPassword: SrdRef[Input];
+
+    Window.instance.setView(Box().{
+        style.{
+            height = Length.percent(100);
+            height = Length.percent(100);
+            display = Display.FLEX;
+            layout = Layout.COLUMN;
+            justify = Justify.CENTER;
+            align = Align.CENTER;
+        };
+        addChildren({
+            Text().{
+                notification = this;
+                style.{
+                    margin = Length4.px(10);
+                    fontColor = Color("f00");
+                };
+            },
+            Input().{
+                userName = this;
+                style.margin = Length4.px(10);
+                placeholder = String("Username");
+            },
+            Input().{
+                userPassword = this;
+                style.margin = Length4.px(10);
+                placeholder = String("Password");
+            },
+            Input().{
+                roomName = this;
+                style.margin = Length4.px(10);
+                placeholder = String("Room Name");
+            },
+            Input().{
+                roomPassword = this;
+                style.margin = Length4.px(10);
+                placeholder = String("Room Secret");
+            },
+            Button(String("Submit")).{
+                style.margin = Length4.px(10);
+                onClick.connect(closure (widget: ref[Widget], payload: ref[Int]) {
+                    notification.setText(String());
+                    def json: StringBuilder[JsonStringBuilderMixin](1024, 1025);
+                    json.format(
+                        "{ \"userName\": %js, \"userPassword\": %js, \"roomName\": %js, \"roomPassword\": %js }",
+                        userName.getText().trim(),
+                        userPassword.getText(),
+                        roomName.getText().trim(),
+                        roomPassword.getText()
+                    );
+                    sendRequest(
+                        "POST", "/validate-creds", "Content-Type: application/text", json, 10000,
+                        closure (json: Json) {
+                            def status: Int = json("eventData")("status");
+                            if status == 200 {
+                                Root.userName = userName.getText().trim();
+                                Root.userPassword = userPassword.getText();
+                                Root.roomName = roomName.getText().trim();
+                                Root.roomPassword = roomPassword.getText();
+                                success.resolve(0);
+                            } else {
+                                notification.setText(String("Login failed!"));
+                            }
+                        }
+                    );
+                });
+            }
+        });
+    });
+
+    await(success);
+}
+
+@uiEndpoint["/"]
+@title["Wasm Chat"]
+func main {
+    def onFetch: closure (json: Json);
+
+    Window.instance.style.{
+        padding = Length4.pt(0);
+        margin = Length4.pt(0);
+    };
+
+    login();
+
+    def getMessagesJson: String = StringBuilder[JsonStringBuilderMixin](1024, 1025).{
+        format(
+            "{ \"userName\": %js, \"userPassword\": %js, \"roomName\": %js, \"roomPassword\": %js }",
+            userName, userPassword, roomName, roomPassword
+        );
+    };
+
+    Window.instance.setView(Box({}).{
+        style.{
+            height = Length.percent(100);
+            justify = Justify.SPACE_BETWEEN;
+            display = Display.FLEX;
+            layout = Layout.COLUMN;
+            background = Background(Color("aaa"));
+        };
+        addChildren({
+            Header(),
+            Text(String()).{
+                style.{
+                    flex = Flex(1);
+                    width = Length.percent(100) - Length.px(20);
+                    margin = Length4.px(10, 10, 0, 10);
+                    fontSize = Length.pt(20.0);
+                    borderStyle = BorderStyle.SOLID;
+                    borderColor = Color("000");
+                    borderWidth = Length4.px(1.5);
+                    background = Background(Color("fff"));
+                };
+                onFetch = closure (json: Json) {
+                    def status: Int[64] = json("eventData")("status");
+                    if status >= 200 and status < 300 {
+                        def data: String = json("eventData")("body");
+                        if this.getText() != data {
+                            this.setText(data);
+                        }
+                    }
+                };
+            },
+            TextEntry().{
+                onNewEntry = closure (newData: String) {
+                    def postMessagesJson: StringBuilder[JsonStringBuilderMixin](1024, 1025);
+                    postMessagesJson.format(
+                        "{ \"userName\": %js, \"userPassword\": %js, \"roomName\": %js, \"roomPassword\": %js, \"message\": %js }",
+                        userName, userPassword, roomName, roomPassword, newData
+                    );
+                    sendRequest(
+                        "POST", "/add-message", "Content-Type: application/json", postMessagesJson, 10000,
+                        closure (Json) {
+                            sendRequest("POST", "/get-messages", "Content-Type: application/json", getMessagesJson, 500, onFetch);
+                        }
+                    );
+                };
+            };
+        })
+    });
+
+    startTimer(500000, closure (json: Json) {
+        sendRequest("POST", "/get-messages", "Content-Type: application/json", getMessagesJson, 500, onFetch);
+    });
+    sendRequest("POST", "/get-messages", "Content-Type: application/json", getMessagesJson, 500, onFetch);
+
+    runEventLoop();
+}
+
+//==============================================================================
+// Entry Point
+
+func initializeServer {
+    initializeDatabase();
+}
+
+Nashir.setup[Nashir.Config().{
+    projectName = "chat-example";
+    projectVersion = "v1";
+    serverPort = 8000;
+    initializer~no_deref = initializeServer~ast;
+    dependencies.add(Rows.PostgresqlDriver.getBuildDependencies())؛
+    publishDriver = Nashir.AlususNetPublishDriver();
+}];
+ProgArg.parse(2);
