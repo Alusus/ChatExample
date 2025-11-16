@@ -9,31 +9,33 @@
 
 ## الإعداد
 
-1. ثبت
+لتشغيل التطبيق اتبع الخطوات التالية:
+
+ثبت
   [لغة الأسس](https://alusus.org/ar/download.html).
 
-2. ثبت Docker.
+ثبت Docker.
 
-3. شغل قاعدة البيانات:
+شغل قاعدة البيانات:
 
 <div dir=ltr>
 
-  ```
-  docker compose up -d
-  ```
+```
+docker compose up -d
+```
 
 </div>
 
-4. شغل التطبيق:
-  ```
-  الأسس بداية.أسس ابدأ
-  ```
+شغل التطبيق:
+```
+الأسس بداية.أسس ابدأ
+```
   
  <div dir=ltr>
  
-  ```
-  alusus main.alusus start
-  ```
+```
+alusus main.alusus start
+```
 
 </div>
 
