@@ -2,7 +2,6 @@ import "Srl/String";
 import "Srl/Time";
 import "Apm";
 Apm.importFile("Alusus/Json");
-Apm.importFile("Alusus/AlususNet");
 Apm.importFile("Alusus/Rows", { "Rows.alusus", "Drivers/Postgresql.alusus" });
 Apm.importFile("Alusus/WebPlatform");
 Apm.importFile("Alusus/Nashir", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
@@ -241,7 +240,7 @@ class Header {
                 background = Background(Color("fff"));
             };
             addChildren({
-                Text(String("Wasm Chat")).{
+                Text(String("Chat Example")).{
                     style.fontSize = Length.pt(18.0);
                 }
             });
@@ -330,7 +329,6 @@ func login {
     Window.instance.setView(Box().{
         style.{
             height = Length.percent(100);
-            height = Length.percent(100);
             display = Display.FLEX;
             layout = Layout.COLUMN;
             justify = Justify.CENTER;
@@ -400,7 +398,7 @@ func login {
 }
 
 @uiEndpoint["/"]
-@title["Wasm Chat"]
+@title["Chat Example"]
 func main {
     def onFetch: closure (json: Json);
 

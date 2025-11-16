@@ -1,13 +1,14 @@
 # ChatExample
+[[العربية]](readme.ar.md)
 
 An example chat web app using Alusus language and WebPlatform.
 
 ## Setup
 
 * Install
-  [Alusus language](https://alusus.org/en/download.html)
+  [Alusus language](https://alusus.org/en/download.html).
 
-* Install docker
+* Install Docker.
 
 * Start the DB:
   ```
