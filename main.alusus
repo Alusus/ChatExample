@@ -1,10 +1,10 @@
 import "Srl/String";
 import "Srl/Time";
 import "Apm";
-Apm.importFile("Alusus/Json");
-Apm.importFile("Alusus/Rows", { "Rows.alusus", "Drivers/Postgresql.alusus" });
-Apm.importFile("Alusus/WebPlatform");
-Apm.importFile("Alusus/Nashir", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
+Apm.importPackage("Alusus/Json@0.2");
+Apm.importPackage("Alusus/Rows@0.4", { "Rows.alusus", "Drivers/Postgresql.alusus" });
+Apm.importPackage("Alusus/WebPlatform@0.9");
+Apm.importPackage("Alusus/Nashir@0.6", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
 use Srl;
 use WebPlatform;
 use Promises;
