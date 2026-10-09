@@ -1,13 +1,14 @@
 import "Srl/String";
 import "Srl/Time";
 import "Apm";
-Apm.importPackage("Alusus/Json@0.2");
-Apm.importPackage("Alusus/Rows@0.4", { "Rows.alusus", "Drivers/Postgresql.alusus" });
-Apm.importPackage("Alusus/WebPlatform@0.9");
-Apm.importPackage("Alusus/Nashir@0.6", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
+Apm.importPackage("Alusus/Json@0.3");
+Apm.importPackage("Alusus/Rows@0.5", { "Rows.alusus", "Drivers/Postgresql.alusus" });
+Apm.importPackage("Alusus/WebPlatform@0.11");
+Apm.importPackage("Alusus/Nashir@0.7", { "Nashir.alusus", "PublishDrivers/AlususNet.alusus" });
 use Srl;
 use WebPlatform;
 use Promises;
+use Rows;
 
 //==============================================================================
 // Database
@@ -21,12 +22,12 @@ macro envVarOrDefault[varName, defaultVal] CharsPtr().{
 class RoomModel {
     Rows.define_model_essentials[];
 
-    @VarChar["256"]
+    @VarCharDataType["256"]
     @primaryKey
     @column
     def name: String;
 
-    @VarChar["1024"]
+    @VarCharDataType["1024"]
     @notNull
     @column
     def password: String;
@@ -36,12 +37,12 @@ class RoomModel {
 class UserModel {
     Rows.define_model_essentials[];
 
-    @VarChar["256"]
+    @VarCharDataType["256"]
     @primaryKey
     @column
     def username: String;
 
-    @VarChar["1024"]
+    @VarCharDataType["1024"]
     @notNull
     @column
     def password: String;
@@ -52,23 +53,23 @@ class MessageModel {
     Rows.define_model_essentials[];
 
     @foreignKey["rooms", "name"]
-    @VarChar["256"]
+    @VarCharDataType["256"]
     @notNull
     @column["room_name"]
     def roomName: String;
 
     @foreignKey["users", "username"]
-    @VarChar["256"]
+    @VarCharDataType["256"]
     @notNull
     @column
     def username: String;
 
-    @VarChar["1024"]
+    @VarCharDataType["1024"]
     @notNull
     @column
     def message: String;
 
-    @BigInteger
+    @BigIntDataType
     @notNull
     @column["creation_date"]
     def creationDate: Int[64];
@@ -340,6 +341,11 @@ func login {
                 style.{
                     margin = Length4.px(10);
                     fontColor = Color("f00");
+                };
+            },
+            Text(String("Login")).{
+                style.{
+                    margin = Length4.px(10);
                 };
             },
             Input().{
